@@ -1,5 +1,6 @@
 package com.example
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Bundle
@@ -9,6 +10,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -17,37 +19,50 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.api.*
+import com.example.data.*
 import com.example.ui.theme.MyApplicationTheme
+import com.example.viewmodel.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -69,7 +84,7 @@ enum class Screen {
     INICIO, ESCAPE, PAZ, AJUSTES
 }
 
-data class ZenScenario(
+data class LocalZenScenario(
     val title: String,
     val metaphor: String,
     val prompt: String,
@@ -83,6 +98,14 @@ fun OasisScreen() {
     val coroutineScope = rememberCoroutineScope()
     var currentScreen by remember { mutableStateOf(Screen.INICIO) }
 
+    // SharedPreferences for name personalization
+    val context = LocalContext.current
+    val sharedPreferences = remember { context.getSharedPreferences("oasis_pref", Context.MODE_PRIVATE) }
+    var userName by remember { mutableStateOf(sharedPreferences.getString("user_name", "Viajero") ?: "Viajero") }
+
+    // ViewModel implementation for centralized robust state management (M3 mandate)
+    val viewModel: OasisViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
+
     // API Key Configuration check
     val rawApiKey = BuildConfig.GEMINI_API_KEY
     val isApiKeyConfigured = remember(rawApiKey) {
@@ -94,100 +117,157 @@ fun OasisScreen() {
 
     // --- State: Escape (AI Image Gen) ---
     var stressInput by remember { mutableStateOf("") }
+    var searchTitle by remember { mutableStateOf("") }
     var isGeneratingImage by remember { mutableStateOf(false) }
     var generatedImage by remember { mutableStateOf<Bitmap?>(null) }
-    var imageMessage by remember { mutableStateOf("Personaliza tu oasis de serenidad escribiendo tu estrés debajo o seleccionando un templo visual de paz.") }
+    var imageMessage by remember { mutableStateOf("Personaliza tu oasis de serenidad redactando tu desasosiego debajo o seleccionando un templo de calma.") }
     var translatedPromptUsed by remember { mutableStateOf("") }
-    var activeLocalScenarioIndex by remember { mutableStateOf(0) }
+    var activeScenarioIndex by remember { mutableStateOf(0) }
+    var isScenarioCustomLoaded by remember { mutableStateOf(false) }
 
-    // Local scenarios list for demo or inspirations
-    val localScenarios = remember {
+    // Scenarios loaded from local + DB
+    val savedScenarios by viewModel.savedScenarios.collectAsState()
+
+    val baseScenarios = remember {
         listOf(
-            ZenScenario(
+            LocalZenScenario(
                 title = "Río Calmo",
-                metaphor = "Tu mente es un río de aguas tibias. Cada estrés es una hoja dorada que cae suavemente de los sauces y navega lejos, sin tocar el fondo.",
+                metaphor = "Tu mente es un río de aguas templadas. Cada aflicción es una hoja dorada que cae de los sauces, flotando lejos sin tocar el fondo.",
                 prompt = "Serene watercolor of willow branch leaves floating on crystal clear misty river, magical golden light, calm ripples.",
-                color1 = Color(0xFFD0BCFF),
-                color2 = Color(0xFF49454F)
+                color1 = Color(0xFF80DEEA),
+                color2 = Color(0xFF006064)
             ),
-            ZenScenario(
+            LocalZenScenario(
                 title = "Nebulosa Paz",
-                metaphor = "Los plazos pendientes se desvanecen en una nebulosa cósmica violeta. Flotas sin peso, envuelto por estrellas tímidas que parpadean.",
+                metaphor = "Los plazos urgentes se diluyen en una nebulosa violeta cósmica. Flotas sin peso, custodiado por amables estrellas tímidas.",
                 prompt = "Enchanting cosmic cloud nebula, deep purple and violet background with glowing soft spheres, minimalist abstract vector.",
-                color1 = Color(0xFF64B5F6),
-                color2 = Color(0xFF2C1B33)
+                color1 = Color(0xFFD0BCFF),
+                color2 = Color(0xFF4A148C)
             ),
-            ZenScenario(
+            LocalZenScenario(
                 title = "Dunas de Luz",
-                metaphor = "La fatiga se disuelve en dunas de arena fina que el viento nocturno peina en silencio. Cada grano de arena brilla bajo la luna.",
+                metaphor = "La fatiga se absorbe en dunas de arena fina que el viento nocturno peina en absoluto silencio. Granos dorados que brillan.",
                 prompt = "Minimalist smooth sand dunes under soft moonlight dark sky, pink pastel highlights, calming atmosphere, highly cinematic.",
                 color1 = Color(0xFFFFB74D),
-                color2 = Color(0xFF2D2F36)
+                color2 = Color(0xFFE65100)
             ),
-            ZenScenario(
+            LocalZenScenario(
                 title = "Templo Lluvia",
-                metaphor = "Las conversaciones se silencian bajo el compás rítmico de la lluvia sobre techos de bambú. Estás abrigado dentro del templo, respirando paz.",
+                metaphor = "Las conversaciones se silencian bajo el compás de la lluvia sobre techos de bambú. Estás abrigado dentro del templo respirando paz.",
                 prompt = "Traditional Japanese architecture, wet stones reflection, gentle raindrops, warm soft paper lantern light, dreamy painting.",
                 color1 = Color(0xFFF06292),
-                color2 = Color(0xFF1C1326)
+                color2 = Color(0xFF880E4F)
             )
         )
     }
 
-    // --- State: Paz (Zen Reflection Generator) ---
-    var generatedMantra by remember { mutableStateOf("El trabajo es solo una parte del paisaje, tú eres el cielo entero que lo rodea. Respira, no tienes nada que demostrar en este segundo.") }
-    var isGeneratingMantra by remember { mutableStateOf(false) }
-
-    // --- State: Breathing (Inicio) ---
-    var isInspiring by remember { mutableStateOf(true) }
-    var phaseText by remember { mutableStateOf("Inspira profundo...") }
-
-    val scale by animateFloatAsState(
-        targetValue = if (isInspiring) 1.5f else 1f,
-        animationSpec = tween(durationMillis = 4000, easing = LinearOutSlowInEasing),
-        label = "breathePulse"
-    )
-
-    val alpha by animateFloatAsState(
-        targetValue = if (isInspiring) 0.8f else 0.3f,
-        animationSpec = tween(durationMillis = 4000, easing = LinearEasing),
-        label = "breatheAlpha"
-    )
-
-    LaunchedEffect(Unit) {
-        while (true) {
-            isInspiring = true
-            phaseText = "Inspira profundo..."
-            delay(4000)
-            isInspiring = false
-            phaseText = "Exhala suavemente..."
-            delay(4000)
+    // Currently Selected Scenario Details
+    val currentScenarioColors = remember(activeScenarioIndex, isScenarioCustomLoaded, savedScenarios) {
+        if (isScenarioCustomLoaded && activeScenarioIndex in savedScenarios.indices) {
+            val sc = savedScenarios[activeScenarioIndex]
+            val c1 = try { Color(android.graphics.Color.parseColor(sc.color1Hex)) } catch (_: Exception) { Color(0xFF80DEEA) }
+            val c2 = try { Color(android.graphics.Color.parseColor(sc.color2Hex)) } catch (_: Exception) { Color(0xFF006064) }
+            Pair(c1, c2)
+        } else {
+            val idx = activeScenarioIndex.coerceIn(0, baseScenarios.lastIndex)
+            val sc = baseScenarios[idx]
+            Pair(sc.color1, sc.color2)
         }
     }
 
-    val quotes = listOf(
-        "El mundo puede esperar un momento.",
-        "Tu valor no se mide por lo que produces.",
-        "Respira. Estás aquí y ahora.",
-        "Desconectar también es avanzar.",
-        "Haz una pausa. Tómate el tiempo de simplemente ser.",
-        "No eres tu trabajo. Eres el silencio místico entre tus pensamientos."
-    )
-    val currentQuote = remember(currentScreen) { quotes.random() }
+    val currentScenarioMetaphor = remember(activeScenarioIndex, isScenarioCustomLoaded, savedScenarios) {
+        if (isScenarioCustomLoaded && activeScenarioIndex in savedScenarios.indices) {
+            savedScenarios[activeScenarioIndex].metaphor
+        } else {
+            val idx = activeScenarioIndex.coerceIn(0, baseScenarios.lastIndex)
+            baseScenarios[idx].metaphor
+        }
+    }
 
-    // Main Scaffold enclosing our entire polished experience
+    // --- State: Paz (Zen Mantra Wis) ---
+    var generatedMantra by remember { mutableStateOf("El trabajo es solo una porción del paisaje, tú eres el cielo entero que lo envuelve. Respira suave, estás seguro ahora de pausar.") }
+    var isGeneratingMantra by remember { mutableStateOf(false) }
+    var myCustomMantraInput by remember { mutableStateOf("") }
+
+    // Observe DB mantras
+    val savedMantras by viewModel.savedMantras.collectAsState()
+
+    // --- State: Breathing (Metronome) ---
+    val isBreatheRunning by viewModel.isBreatheRunning.collectAsState()
+    val selectedMode by viewModel.selectedMode.collectAsState()
+    val currentPhase by viewModel.currentPhase.collectAsState()
+    val phaseSecondsRemaining by viewModel.phaseSecondsRemaining.collectAsState()
+    val sessionProgressSec by viewModel.sessionProgressSec.collectAsState()
+    val targetSessionMinutes by viewModel.targetSessionMinutes.collectAsState()
+    val isAudioAlertsEnabled by viewModel.isAudioAlertsEnabled.collectAsState()
+
+    // Breathing Stats Collect
+    val currentStreak by viewModel.currentStreak.collectAsState()
+    val totalBreathingMinutes by viewModel.totalBreathingMinutes.collectAsState()
+    val totalSessionsCompleted by viewModel.totalSessionsCompleted.collectAsState()
+
+    // Timer trigger feedback overlay
+    var showCompletionDialog by remember { mutableStateOf(false) }
+    var lastPracticedMode by remember { mutableStateOf("") }
+    var lastPracticedMinutes by remember { mutableStateOf(1) }
+
+    LaunchedEffect(isBreatheRunning) {
+        if (!isBreatheRunning && sessionProgressSec > 0) {
+            val targetSec = targetSessionMinutes * 60
+            if (sessionProgressSec >= targetSec) {
+                lastPracticedMode = selectedMode.displayName
+                lastPracticedMinutes = targetSessionMinutes
+                showCompletionDialog = true
+            }
+        }
+    }
+
+    // Dynamic color matching of the breathing rings to the current phase
+    val breathingPhaseColor = when (currentPhase) {
+        BreathingPhase.INHALE -> Color(0xFF80DEEA)   // Luminous Cyan
+        BreathingPhase.HOLD_IN -> Color(0xFFFFD54F)  // Warm Amber
+        BreathingPhase.EXHALE -> Color(0xFFE1BEE7)   // Soft Orchid
+        BreathingPhase.HOLD_OUT -> Color(0xFF9FA8DA)  // Twilight Slate
+    }
+
+    // Breathing scale animation synchronized with phase directions
+    val scaleBreatheTarget = when {
+        !isBreatheRunning -> 1.0f
+        currentPhase == BreathingPhase.INHALE -> 1.55f
+        currentPhase == BreathingPhase.HOLD_IN -> 1.55f
+        currentPhase == BreathingPhase.EXHALE -> 1.0f
+        currentPhase == BreathingPhase.HOLD_OUT -> 1.0f
+        else -> 1.0f
+    }
+
+    val phaseScaleDuration = when (currentPhase) {
+        BreathingPhase.INHALE -> selectedMode.inhaleSec * 1000
+        BreathingPhase.HOLD_IN -> selectedMode.holdInSec * 1000
+        BreathingPhase.EXHALE -> selectedMode.exhaleSec * 1000
+        BreathingPhase.HOLD_OUT -> selectedMode.holdOutSec * 1000
+    }
+
+    val animateBreatheScale by animateFloatAsState(
+        targetValue = scaleBreatheTarget,
+        animationSpec = tween(
+            durationMillis = if (isBreatheRunning) phaseScaleDuration else 4000,
+            easing = if (currentPhase == BreathingPhase.INHALE) LinearOutSlowInEasing else FastOutLinearInEasing
+        ),
+        label = "breatheAnimScale"
+    )
+
+    // Main Scaffold layout
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         bottomBar = {
-            // Elegant Navigation Bar replicating the exact Sophisticated Dark profile
             Column {
-                Divider(color = Color(0xFF44474F), thickness = 1.dp)
+                Divider(color = Color(0xFF2C2F36), thickness = 1.dp)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(Color(0xFF1A1C1E))
+                        .background(Color(0xFF0F1113))
                         .windowInsetsPadding(WindowInsets.navigationBars)
-                        .height(80.dp)
+                        .height(82.dp)
                         .padding(bottom = 8.dp),
                     horizontalArrangement = Arrangement.SpaceAround,
                     verticalAlignment = Alignment.CenterVertically
@@ -199,13 +279,13 @@ fun OasisScreen() {
                         onClick = { currentScreen = Screen.INICIO }
                     )
                     NavItem(
-                        icon = Icons.Default.Search, // Represents Explorer/Escape
+                        icon = Icons.Default.Search,
                         label = "Escape",
                         isSelected = currentScreen == Screen.ESCAPE,
                         onClick = { currentScreen = Screen.ESCAPE }
                     )
                     NavItem(
-                        icon = Icons.Default.Favorite, // Represents Paz
+                        icon = Icons.Default.Favorite,
                         label = "Paz",
                         isSelected = currentScreen == Screen.PAZ,
                         onClick = { currentScreen = Screen.PAZ }
@@ -223,115 +303,360 @@ fun OasisScreen() {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color(0xFF0F1113))
+                .background(Color(0xFF0A0C0E))
                 .padding(innerPadding)
                 .padding(16.dp),
             contentAlignment = Alignment.Center
         ) {
-            // Screen outer decorative frame box
+            // Elegant Outer Border Wrap (Sophisticated Dark Minimalist Aesthetic)
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(
                         brush = Brush.verticalGradient(
                             colors = listOf(
-                                Color(0xFF2D2F36),
-                                Color(0xFF111318)
+                                Color(0xFF1E2125),
+                                Color(0xFF0E0F11)
                             )
                         ),
-                        shape = RoundedCornerShape(40.dp)
+                        shape = RoundedCornerShape(36.dp)
                     )
                     .border(
                         width = 1.dp,
-                        color = Color(0xFF44474F),
-                        shape = RoundedCornerShape(40.dp)
+                        color = Color(0xFF2C2F36),
+                        shape = RoundedCornerShape(36.dp)
                     )
             ) {
-                // Main content renderer per Selected Screen
-                Crossfade(targetState = currentScreen, label = "screenTransition") { screen ->
+                Crossfade(targetState = currentScreen, label = "mainFadeTransitions") { screen ->
                     when (screen) {
                         Screen.INICIO -> {
-                            Column(
+                            LazyColumn(
                                 horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center,
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .padding(24.dp)
+                                verticalArrangement = Arrangement.Top,
+                                contentPadding = PaddingValues(24.dp),
+                                modifier = Modifier.fillMaxSize()
                             ) {
-                                // Supertitle
-                                Text(
-                                    text = "BIENVENIDO A TU OASIS",
-                                    color = Color(0xFFD0BCFF),
-                                    style = MaterialTheme.typography.titleSmall,
-                                    letterSpacing = 4.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    textAlign = TextAlign.Center,
-                                    modifier = Modifier.padding(bottom = 8.dp)
-                                )
+                                // Greet personal user
+                                item {
+                                    Text(
+                                        text = "Hola, $userName",
+                                        color = Color.White,
+                                        style = MaterialTheme.typography.headlineMedium,
+                                        fontWeight = FontWeight.ExtraLight,
+                                        modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+                                        textAlign = TextAlign.Start
+                                    )
+                                    Text(
+                                        text = "Tu Santuario personal de relajación y pausa",
+                                        color = Color(0xFF94979F),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        modifier = Modifier.fillMaxWidth().padding(bottom = 20.dp),
+                                        textAlign = TextAlign.Start
+                                    )
+                                }
 
-                                Text(
-                                    text = "Desconéctate",
-                                    color = Color(0xFF94979F),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    textAlign = TextAlign.Center,
-                                    modifier = Modifier.padding(bottom = 48.dp)
-                                )
-
-                                // Animated dynamic canvas breathing circle
-                                Box(
-                                    modifier = Modifier
-                                        .size(220.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Canvas(modifier = Modifier.fillMaxSize()) {
-                                        // Draw smooth ambient glows
-                                        drawCircle(
-                                            color = Color(0xFFD0BCFF),
-                                            radius = (size.minDimension / 2.2f) * scale,
-                                            alpha = alpha * 0.4f
+                                // Interactive stats row
+                                item {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        StatCard(
+                                            title = "Racha",
+                                            value = if (currentStreak == 0) "Comenzar" else "$currentStreak días",
+                                            iconText = "🔥",
+                                            colorBg = Color(0xFFE65100).copy(alpha = 0.12f),
+                                            colorBorder = Color(0xFFFFB74D),
+                                            modifier = Modifier.weight(1f)
                                         )
-                                        drawCircle(
-                                            color = Color(0xFFD0BCFF).copy(alpha = alpha / 3),
-                                            radius = (size.minDimension / 2.2f) * (scale * 1.25f),
-                                            alpha = alpha * 0.2f
+                                        StatCard(
+                                            title = "Práctica",
+                                            value = "$totalBreathingMinutes min",
+                                            iconText = "⏱️",
+                                            colorBg = Color(0xFF006064).copy(alpha = 0.12f),
+                                            colorBorder = Color(0xFF80DEEA),
+                                            modifier = Modifier.weight(1f)
                                         )
-                                        // Center core
-                                        drawCircle(
-                                            color = Color(0xFFD0BCFF),
-                                            radius = 35.dp.toPx(),
-                                            alpha = 0.8f
+                                        StatCard(
+                                            title = "Sesiones",
+                                            value = "$totalSessionsCompleted pausas",
+                                            iconText = "🌌",
+                                            colorBg = Color(0xFF4A148C).copy(alpha = 0.12f),
+                                            colorBorder = Color(0xFFD0BCFF),
+                                            modifier = Modifier.weight(1f)
                                         )
                                     }
                                 }
 
-                                Spacer(modifier = Modifier.height(48.dp))
+                                // Core metronome wave circle
+                                item {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(242.dp)
+                                            .padding(vertical = 12.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        // Draw smooth ambient glows inside canvas
+                                        Canvas(modifier = Modifier.fillMaxSize()) {
+                                            val radius = (size.minDimension / 2f)
+                                            // Phase glow layers
+                                            drawCircle(
+                                                color = breathingPhaseColor,
+                                                radius = radius * animateBreatheScale * 0.72f,
+                                                alpha = 0.18f
+                                            )
+                                            drawCircle(
+                                                color = breathingPhaseColor.copy(alpha = 0.4f),
+                                                radius = radius * animateBreatheScale * 0.95f,
+                                                alpha = 0.08f
+                                            )
 
-                                // Instruction text
-                                Text(
-                                    text = phaseText,
-                                    color = MaterialTheme.colorScheme.onBackground,
-                                    style = MaterialTheme.typography.headlineMedium,
-                                    fontWeight = FontWeight.Medium,
-                                    textAlign = TextAlign.Center
-                                )
+                                            // Rotating outline arc representing phase progress
+                                            if (isBreatheRunning) {
+                                                val totalPhaseSec = when (currentPhase) {
+                                                    BreathingPhase.INHALE -> selectedMode.inhaleSec
+                                                    BreathingPhase.HOLD_IN -> selectedMode.holdInSec
+                                                    BreathingPhase.EXHALE -> selectedMode.exhaleSec
+                                                    BreathingPhase.HOLD_OUT -> selectedMode.holdOutSec
+                                                }
+                                                val remainingFraction = if (totalPhaseSec > 0) {
+                                                    phaseSecondsRemaining.toFloat() / totalPhaseSec.toFloat()
+                                                } else 1.0f
 
-                                Spacer(modifier = Modifier.height(32.dp))
+                                                drawArc(
+                                                    color = breathingPhaseColor,
+                                                    startAngle = -90f,
+                                                    sweepAngle = remainingFraction * 360f,
+                                                    useCenter = false,
+                                                    style = Stroke(width = 4.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round),
+                                                    size = Size(radius * 1.55f, radius * 1.55f),
+                                                    topLeft = Offset(radius - radius * 0.775f, radius - radius * 0.775f)
+                                                )
+                                            }
+                                        }
 
-                                // Subtitle quote
-                                Text(
-                                    text = currentQuote,
-                                    color = Color(0xFF94979F),
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    textAlign = TextAlign.Center,
-                                    lineHeight = 28.sp,
-                                    fontStyle = FontStyle.Italic,
-                                    modifier = Modifier.padding(horizontal = 16.dp)
-                                )
+                                        // Center status textual prompts
+                                        Column(
+                                            horizontalAlignment = Alignment.CenterHorizontally,
+                                            verticalArrangement = Arrangement.Center,
+                                            modifier = Modifier.padding(24.dp)
+                                        ) {
+                                            if (isBreatheRunning) {
+                                                Text(
+                                                    text = "$phaseSecondsRemaining",
+                                                    color = Color.White,
+                                                    style = MaterialTheme.typography.displayMedium,
+                                                    fontWeight = FontWeight.Light
+                                                )
+                                                Spacer(modifier = Modifier.height(4.dp))
+                                                Text(
+                                                    text = currentPhase.label,
+                                                    color = breathingPhaseColor,
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    fontWeight = FontWeight.Bold,
+                                                    textAlign = TextAlign.Center,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            } else {
+                                                Text(
+                                                    text = "🧘",
+                                                    fontSize = 44.sp,
+                                                    modifier = Modifier.padding(bottom = 6.dp)
+                                                )
+                                                Text(
+                                                    text = "Respira",
+                                                    color = Color.White,
+                                                    style = MaterialTheme.typography.titleMedium,
+                                                    fontWeight = FontWeight.Normal
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Interactive practices actions
+                                item {
+                                    Spacer(modifier = Modifier.height(28.dp))
+
+                                    if (isBreatheRunning) {
+                                        // Dynamic practicing stats indicators
+                                        val sessionTargetSec = targetSessionMinutes * 60
+                                        val progressFraction = (sessionProgressSec.toFloat() / sessionTargetSec.toFloat()).coerceIn(0f, 1f)
+                                        
+                                        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween
+                                            ) {
+                                                Text(
+                                                    text = "Pausa activa: ${selectedMode.displayName}",
+                                                    color = Color(0xFFE2E2E6),
+                                                    style = MaterialTheme.typography.bodySmall
+                                                )
+                                                Text(
+                                                    text = "${sessionProgressSec}s / ${sessionTargetSec}s",
+                                                    color = Color(0xFF94979F),
+                                                    style = MaterialTheme.typography.bodySmall
+                                                )
+                                            }
+                                            Spacer(modifier = Modifier.height(8.dp))
+                                            LinearProgressIndicator(
+                                                progress = { progressFraction },
+                                                color = breathingPhaseColor,
+                                                trackColor = Color(0xFF1F2023),
+                                                modifier = Modifier.fillMaxWidth().height(6.dp).clip(CircleShape)
+                                            )
+                                        }
+
+                                        Spacer(modifier = Modifier.height(24.dp))
+
+                                        Button(
+                                            onClick = { viewModel.stopBreathingSession(completedSuccessfully = false) },
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = Color(0xFFF06292).copy(alpha = 0.2f),
+                                                contentColor = Color(0xFFF06292)
+                                            ),
+                                            border = BorderStroke(1.dp, Color(0xFFF06292).copy(alpha = 0.3f)),
+                                            modifier = Modifier.fillMaxWidth().height(54.dp),
+                                            shape = RoundedCornerShape(100.dp)
+                                        ) {
+                                            Text("DETENER PRÁCTICA", fontWeight = FontWeight.SemiBold, letterSpacing = 1.sp)
+                                        }
+                                    } else {
+                                        // Configure practice parameters
+                                        Text(
+                                            text = "Técnica de respiración:",
+                                            color = Color(0xFF94979F),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                                        )
+
+                                        Column(
+                                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            BreathingMode.values().forEach { mode ->
+                                                val isSelected = selectedMode == mode
+                                                Box(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .background(
+                                                            color = if (isSelected) Color(0xFFD0BCFF).copy(alpha = 0.1f) else Color(0xFF16181C),
+                                                            shape = RoundedCornerShape(18.dp)
+                                                        )
+                                                        .border(
+                                                            width = 1.dp,
+                                                            color = if (isSelected) Color(0xFFD0BCFF) else Color(0xFF2C2F36),
+                                                            shape = RoundedCornerShape(18.dp)
+                                                        )
+                                                        .clickable { viewModel.selectBreathingMode(mode) }
+                                                        .padding(14.dp)
+                                                ) {
+                                                    Column {
+                                                        Row(
+                                                            modifier = Modifier.fillMaxWidth(),
+                                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                                            verticalAlignment = Alignment.CenterVertically
+                                                        ) {
+                                                            Text(
+                                                                text = mode.displayName,
+                                                                color = if (isSelected) Color(0xFFD0BCFF) else Color.White,
+                                                                style = MaterialTheme.typography.bodyMedium,
+                                                                fontWeight = FontWeight.Bold
+                                                            )
+                                                            
+                                                            val cadenceStr = buildString {
+                                                                append("${mode.inhaleSec}s")
+                                                                if (mode.holdInSec > 0) append("/${mode.holdInSec}s")
+                                                                append("/${mode.exhaleSec}s")
+                                                                if (mode.holdOutSec > 0) append("/${mode.holdOutSec}s")
+                                                            }
+                                                            Text(
+                                                                text = cadenceStr,
+                                                                color = Color(0xFF94979F),
+                                                                style = MaterialTheme.typography.labelSmall
+                                                            )
+                                                        }
+                                                        Spacer(modifier = Modifier.height(4.dp))
+                                                        Text(
+                                                            text = mode.description,
+                                                            color = Color(0xFF94979F),
+                                                            style = MaterialTheme.typography.bodySmall,
+                                                            lineHeight = 16.sp
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        Spacer(modifier = Modifier.height(16.dp))
+
+                                        // Target minutes selection row
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "Duración:",
+                                                color = Color(0xFF94979F),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                modifier = Modifier.padding(bottom = 4.dp)
+                                            )
+
+                                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                listOf(1, 2, 5, 10).forEach { mins ->
+                                                    val isMinSel = targetSessionMinutes == mins
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .background(
+                                                                color = if (isMinSel) Color(0xFFD0BCFF).copy(alpha = 0.15f) else Color(0xFF16181C),
+                                                                shape = RoundedCornerShape(100.dp)
+                                                            )
+                                                            .border(
+                                                                width = 1.dp,
+                                                                color = if (isMinSel) Color(0xFFD0BCFF) else Color(0xFF2C2F36),
+                                                                shape = RoundedCornerShape(100.dp)
+                                                            )
+                                                            .clickable { viewModel.setTargetSessionMinutes(mins) }
+                                                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                                                    ) {
+                                                        Text(
+                                                            text = "$mins min",
+                                                            color = if (isMinSel) Color(0xFFD0BCFF) else Color(0xFFC4C6D0),
+                                                            style = MaterialTheme.typography.labelMedium,
+                                                            fontWeight = FontWeight.Bold
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        Spacer(modifier = Modifier.height(24.dp))
+
+                                        Button(
+                                            onClick = { viewModel.startBreathingSession() },
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = Color(0xFFD0BCFF),
+                                                contentColor = Color(0xFF381E72)
+                                            ),
+                                            modifier = Modifier.fillMaxWidth().height(56.dp),
+                                            shape = RoundedCornerShape(100.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.PlayArrow,
+                                                contentDescription = "Iniciar",
+                                                modifier = Modifier.padding(end = 6.dp)
+                                            )
+                                            Text("INICIAR PAUSA CONSCIENTE", fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
+                                        }
+                                    }
+                                }
                             }
                         }
 
                         Screen.ESCAPE -> {
-                            // Close Keyboard hooks
                             val keyboardController = LocalSoftwareKeyboardController.current
                             val focusManager = LocalFocusManager.current
 
@@ -342,33 +667,32 @@ fun OasisScreen() {
                                 modifier = Modifier.fillMaxSize()
                             ) {
                                 item {
-                                    // Header tag
                                     Box(
                                         modifier = Modifier
                                             .background(
-                                                color = Color(0xFFD0BCFF).copy(alpha = 0.1f),
+                                                color = Color(0xFF80DEEA).copy(alpha = 0.1f),
                                                 shape = RoundedCornerShape(100.dp)
                                             )
                                             .border(
                                                 width = 1.dp,
-                                                color = Color(0xFFD0BCFF).copy(alpha = 0.2f),
+                                                color = Color(0xFF80DEEA).copy(alpha = 0.2f),
                                                 shape = RoundedCornerShape(100.dp)
                                             )
                                             .padding(horizontal = 16.dp, vertical = 6.dp)
                                     ) {
                                         Text(
-                                            text = if (isDemoMode) "MODO DEMO ACTIVO (LOCAL)" else "SABIDURÍA DE IA ACTIVA",
-                                            color = Color(0xFFD0BCFF),
+                                            text = if (isDemoMode) "SIMULACIÓN LOCAL" else "ORÁCULO VISUAL ACTIVO",
+                                            color = Color(0xFF80DEEA),
                                             style = MaterialTheme.typography.labelSmall,
                                             fontWeight = FontWeight.Bold,
                                             letterSpacing = 1.5.sp
                                         )
                                     }
 
-                                    Spacer(modifier = Modifier.height(16.dp))
+                                    Spacer(modifier = Modifier.height(14.dp))
 
                                     Text(
-                                        text = "Oasis Visual IA",
+                                        text = "Escapismo Trascendental IA",
                                         color = Color.White,
                                         style = MaterialTheme.typography.headlineSmall,
                                         fontWeight = FontWeight.Light,
@@ -378,15 +702,15 @@ fun OasisScreen() {
                                     Spacer(modifier = Modifier.height(16.dp))
                                 }
 
-                                // Interactive display card
+                                // Interactive Viewport Card
                                 item {
                                     Box(
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .height(260.dp)
+                                            .height(262.dp)
                                             .clip(RoundedCornerShape(24.dp))
-                                            .background(Color(0xFF1F2023))
-                                            .border(1.dp, Color(0xFF44474F), RoundedCornerShape(24.dp)),
+                                            .background(Color(0xFF16181C))
+                                            .border(1.dp, Color(0xFF2C2F36), RoundedCornerShape(24.dp)),
                                         contentAlignment = Alignment.Center
                                     ) {
                                         if (isGeneratingImage) {
@@ -394,11 +718,11 @@ fun OasisScreen() {
                                                 horizontalAlignment = Alignment.CenterHorizontally,
                                                 verticalArrangement = Arrangement.Center
                                             ) {
-                                                CircularProgressIndicator(color = Color(0xFFD0BCFF))
+                                                CircularProgressIndicator(color = Color(0xFF80DEEA))
                                                 Spacer(modifier = Modifier.height(16.dp))
                                                 Text(
-                                                    text = "Invocando paz con la IA...",
-                                                    color = Color(0xFFD0BCFF),
+                                                    text = "Traduciendo tu estrés en paz visual...",
+                                                    color = Color(0xFF80DEEA),
                                                     style = MaterialTheme.typography.bodyMedium,
                                                     fontStyle = FontStyle.Italic
                                                 )
@@ -406,92 +730,116 @@ fun OasisScreen() {
                                         } else if (generatedImage != null) {
                                             Image(
                                                 bitmap = generatedImage!!.asImageBitmap(),
-                                                contentDescription = "Oasis Visual",
+                                                contentDescription = "Oasis Visual Forjado",
                                                 modifier = Modifier.fillMaxSize(),
                                                 contentScale = ContentScale.Crop
                                             )
+
+                                            // Bookmark Action Icon overlay
+                                            Box(
+                                                modifier = Modifier.fillMaxSize().padding(14.dp),
+                                                contentAlignment = Alignment.TopEnd
+                                            ) {
+                                                var isSavedSc by remember { mutableStateOf(false) }
+                                                IconButton(
+                                                    onClick = {
+                                                        val title = searchTitle.ifEmpty { "Mi Oasis ${savedScenarios.size + 1}" }
+                                                        val metaphor = "Tu carga de estrés, envuelta en un sutil santuario de paz infinita."
+                                                        val pr = translatedPromptUsed.ifEmpty { "Serene abstract landscape watercolor background." }
+                                                        viewModel.saveScenario(
+                                                            title = title,
+                                                            metaphor = metaphor,
+                                                            prompt = pr,
+                                                            color1Hex = "#80DEEA",
+                                                            color2Hex = "#006064"
+                                                        )
+                                                        isSavedSc = true
+                                                    },
+                                                    modifier = Modifier.background(Color.Black.copy(alpha = 0.6f), CircleShape)
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Favorite,
+                                                        contentDescription = "Guardar",
+                                                        tint = if (isSavedSc) Color(0xFFF06292) else Color.White
+                                                    )
+                                                }
+                                            }
                                         } else {
-                                            // Procedural elegant custom canvas for offline/demo/initial screen
-                                            val scenario = localScenarios[activeLocalScenarioIndex]
+                                            // Procedural elegant custom canvas using color gradients
+                                            val scColor1 = currentScenarioColors.first
+                                            val scColor2 = currentScenarioColors.second
                                             Canvas(modifier = Modifier.fillMaxSize()) {
                                                 drawRect(
                                                     brush = Brush.verticalGradient(
-                                                        colors = listOf(scenario.color1.copy(alpha = 0.2f), Color(0xFF111318))
+                                                        colors = listOf(scColor1.copy(alpha = 0.35f), Color(0xFF0C0D0F))
                                                     )
                                                 )
-                                                // Dynamic procedural smooth glowing rings representing nature
                                                 drawCircle(
-                                                    color = scenario.color1.copy(alpha = 0.4f),
-                                                    radius = 120.dp.toPx(),
-                                                    center = Offset(size.width / 2, size.height / 1.5f)
+                                                    color = scColor1.copy(alpha = 0.3f),
+                                                    radius = 110.dp.toPx(),
+                                                    center = Offset(size.width / 2f, size.height / 1.4f)
                                                 )
                                                 drawCircle(
                                                     color = Color.White.copy(alpha = 0.15f),
-                                                    radius = 40.dp.toPx(),
-                                                    center = Offset(size.width / 2, size.height / 1.7f)
+                                                    radius = 45.dp.toPx(),
+                                                    center = Offset(size.width / 2f, size.height / 1.6f)
                                                 )
                                             }
 
-                                            // Description overlay
+                                            // Text Metaphor Overlay
                                             Box(
                                                 modifier = Modifier
                                                     .fillMaxSize()
-                                                    .background(Color.Black.copy(alpha = 0.4f))
+                                                    .background(Color.Black.copy(alpha = 0.5f))
                                                     .padding(24.dp),
                                                 contentAlignment = Alignment.Center
                                             ) {
                                                 Text(
-                                                    text = scenario.metaphor,
+                                                    text = currentScenarioMetaphor,
                                                     color = Color.White,
                                                     style = MaterialTheme.typography.bodyMedium,
                                                     textAlign = TextAlign.Center,
                                                     lineHeight = 24.sp,
-                                                    fontWeight = FontWeight.Medium
+                                                    fontWeight = FontWeight.Light,
+                                                    fontStyle = FontStyle.Italic
                                                 )
                                             }
                                         }
                                     }
-
-                                    Spacer(modifier = Modifier.height(20.dp))
+                                    Spacer(modifier = Modifier.height(18.dp))
                                 }
 
-                                // Quick serene preset selection row
+                                // Preset Sanctuaries Choose Title
                                 item {
                                     Text(
-                                        text = "Selecciona un paisaje de meditación:",
+                                        text = "Santuarios predefinidos:",
                                         color = Color(0xFF94979F),
                                         style = MaterialTheme.typography.bodySmall,
                                         modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
                                     )
 
                                     Row(
-                                        modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                                        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
                                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
-                                        localScenarios.forEachIndexed { index, scenario ->
+                                        baseScenarios.forEachIndexed { index, scenario ->
+                                            val isActSc = !isScenarioCustomLoaded && activeScenarioIndex == index && generatedImage == null
                                             Box(
                                                 modifier = Modifier
                                                     .weight(1f)
                                                     .background(
-                                                        color = if (activeLocalScenarioIndex == index && generatedImage == null) {
-                                                            Color(0xFFD0BCFF).copy(alpha = 0.2f)
-                                                        } else {
-                                                            Color(0xFF1F2023)
-                                                        },
+                                                        color = if (isActSc) Color(0xFF80DEEA).copy(alpha = 0.15f) else Color(0xFF16181C),
                                                         shape = RoundedCornerShape(12.dp)
                                                     )
                                                     .border(
                                                         width = 1.dp,
-                                                        color = if (activeLocalScenarioIndex == index && generatedImage == null) {
-                                                            Color(0xFFD0BCFF)
-                                                        } else {
-                                                            Color(0xFF44474F)
-                                                        },
+                                                        color = if (isActSc) Color(0xFF80DEEA) else Color(0xFF2C2F36),
                                                         shape = RoundedCornerShape(12.dp)
                                                     )
                                                     .clickable {
                                                         generatedImage = null
-                                                        activeLocalScenarioIndex = index
+                                                        isScenarioCustomLoaded = false
+                                                        activeScenarioIndex = index
                                                         stressInput = ""
                                                         imageMessage = scenario.metaphor
                                                     }
@@ -500,42 +848,125 @@ fun OasisScreen() {
                                             ) {
                                                 Text(
                                                     text = scenario.title,
-                                                    color = if (activeLocalScenarioIndex == index && generatedImage == null) {
-                                                        Color(0xFFD0BCFF)
-                                                    } else {
-                                                        Color(0xFFE2E2E6)
-                                                    },
+                                                    color = if (isActSc) Color(0xFF80DEEA) else Color(0xFFE2E2E6),
                                                     style = MaterialTheme.typography.labelMedium,
-                                                    fontWeight = FontWeight.Bold
+                                                    fontWeight = FontWeight.Bold,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
                                                 )
                                             }
                                         }
                                     }
                                 }
 
-                                // Custom stressful translator input field
+                                // Personal Custom Scenarios (Room persist)
+                                if (savedScenarios.isNotEmpty()) {
+                                    item {
+                                        Text(
+                                            text = "Tus Santuarios guardados:",
+                                            color = Color(0xFF94979F),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            modifier = Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 8.dp)
+                                        )
+
+                                        // Horizontal row of custom entities
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            savedScenarios.forEachIndexed { sIdx, sc ->
+                                                val isActCustom = isScenarioCustomLoaded && activeScenarioIndex == sIdx && generatedImage == null
+                                                Box(
+                                                    modifier = Modifier
+                                                        .background(
+                                                            color = if (isActCustom) Color(0xFFF06292).copy(alpha = 0.15f) else Color(0xFF16181C),
+                                                            shape = RoundedCornerShape(12.dp)
+                                                        )
+                                                        .border(
+                                                            width = 1.dp,
+                                                            color = if (isActCustom) Color(0xFFF06292) else Color(0xFF2C2F36),
+                                                            shape = RoundedCornerShape(12.dp)
+                                                        )
+                                                        .clickable {
+                                                            generatedImage = null
+                                                            isScenarioCustomLoaded = true
+                                                            activeScenarioIndex = sIdx
+                                                            stressInput = ""
+                                                        }
+                                                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                                                ) {
+                                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                                        Text(
+                                                            text = sc.title,
+                                                            color = if (isActCustom) Color(0xFFF06292) else Color(0xFFE2E2E6),
+                                                            style = MaterialTheme.typography.labelMedium,
+                                                            fontWeight = FontWeight.Bold
+                                                        )
+                                                        Spacer(modifier = Modifier.width(6.dp))
+                                                        Icon(
+                                                            imageVector = Icons.Default.Delete,
+                                                            contentDescription = "Borrar",
+                                                            tint = Color(0xFFF06292).copy(alpha = 0.7f),
+                                                            modifier = Modifier
+                                                                .size(14.dp)
+                                                                .clickable { viewModel.removeScenario(sc) }
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Custom Input Section
                                 item {
+                                    Spacer(modifier = Modifier.height(14.dp))
+                                    Text(
+                                        text = "Redactar nuevo Santuario personalizado:",
+                                        color = Color(0xFF94979F),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)
+                                    )
+
+                                    // Title field
+                                    OutlinedTextField(
+                                        value = searchTitle,
+                                        onValueChange = { searchTitle = it },
+                                        placeholder = { Text("Escribe un título (ej. Mi Bosque Lluvioso)", color = Color(0xFF686B73), fontSize = 13.sp) },
+                                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                                        colors = TextFieldDefaults.colors(
+                                            focusedContainerColor = Color(0xFF16181C),
+                                            unfocusedContainerColor = Color(0xFF16181C),
+                                            focusedTextColor = Color.White,
+                                            unfocusedTextColor = Color.White,
+                                            focusedIndicatorColor = Color(0xFF80DEEA),
+                                            unfocusedIndicatorColor = Color(0xFF2C2F36)
+                                        ),
+                                        shape = RoundedCornerShape(14.dp),
+                                        singleLine = true
+                                    )
+
                                     OutlinedTextField(
                                         value = stressInput,
                                         onValueChange = { stressInput = it },
                                         placeholder = {
                                             Text(
-                                                text = "O redacta tu propia carga (ej. 'Reunión estresante')",
-                                                color = Color(0xFF94979F),
+                                                text = "Describe tu estrés o carga de oficina...",
+                                                color = Color(0xFF686B73),
                                                 fontSize = 13.sp
                                             )
                                         },
                                         modifier = Modifier.fillMaxWidth(),
                                         colors = TextFieldDefaults.colors(
-                                            focusedContainerColor = Color(0xFF1A1C1E),
-                                            unfocusedContainerColor = Color(0xFF1A1C1E),
+                                            focusedContainerColor = Color(0xFF16181C),
+                                            unfocusedContainerColor = Color(0xFF16181C),
                                             focusedTextColor = Color.White,
                                             unfocusedTextColor = Color.White,
-                                            focusedIndicatorColor = Color(0xFFD0BCFF),
-                                            unfocusedIndicatorColor = Color(0xFF44474F)
+                                            focusedIndicatorColor = Color(0xFF80DEEA),
+                                            unfocusedIndicatorColor = Color(0xFF2C2F36)
                                         ),
-                                        shape = RoundedCornerShape(16.dp),
-                                        maxLines = 2,
+                                        shape = RoundedCornerShape(14.dp),
+                                        maxLines = 3,
                                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                                         keyboardActions = KeyboardActions(onDone = {
                                             keyboardController?.hide()
@@ -543,9 +974,8 @@ fun OasisScreen() {
                                         })
                                     )
 
-                                    Spacer(modifier = Modifier.height(16.dp))
+                                    Spacer(modifier = Modifier.height(18.dp))
 
-                                    // Generator Action Button
                                     Button(
                                         onClick = {
                                             keyboardController?.hide()
@@ -553,69 +983,64 @@ fun OasisScreen() {
                                             coroutineScope.launch {
                                                 isGeneratingImage = true
                                                 if (isDemoMode) {
-                                                    // Simulation of AI artwork loading locally
-                                                    delay(3000)
-                                                    // Move to another preset or construct customized metaphor
+                                                    delay(2500)
                                                     if (stressInput.isNotEmpty()) {
-                                                        imageMessage = "Tu estrés ('$stressInput') ha sido absorbido por dunas infinitas de serenidad. Siente cómo todo se detiene."
+                                                        imageMessage = "Tu carga laboral de '${stressInput}' ha sido diluida bajo dunas infinitas de serenidad procedimental local."
                                                     }
                                                     generatedImage = null
                                                 } else {
-                                                    // Real API Call with translated metaphor using gemini
                                                     try {
-                                                        val userStress = stressInput.ifEmpty { localScenarios[activeLocalScenarioIndex].title }
+                                                        val finalStress = stressInput.ifEmpty { "Calma profunda y relajación mística" }
                                                         
-                                                        // 1. Get relaxing Zen prompt in english from gemini-3.5-flash
-                                                        val translationPrompt = "Eres un filósofo Zen y diseñador digital. Convierte este pesadumbre o estrés del usuario ('$userStress') en un prompt para un generador de imágenes en inglés que describa un paisaje de paz absoluta, abstracto, místico, maderas oscuras, acuarelas, orbes de luz blanda, sin palabras negativas, hermoso y relajante. Responde estrictamente con la descripción en inglés."
-                                                        val textRequest = GenerateTextRequest(
-                                                            contents = listOf(ContentText(parts = listOf(PartText(text = translationPrompt))))
+                                                        // 1. Translation zen prompts creator
+                                                        val transPrompt = "Eres un sabio Zen y diseñador digital. Convierte este pesadumbre o estrés de trabajo ('$finalStress') en un prompt para la API de Imagen en inglés que describa un paisaje pacífico abstracto, místico, maderas vaporosas, acuarelas, orbes de luz suave, sin gente, sin rostros, sin palabras en la foto, hermoso y relajante. Responde únicamente con el prompt descriptivo en inglés."
+                                                        val textReq = GenerateTextRequest(
+                                                            contents = listOf(ContentText(parts = listOf(PartText(text = transPrompt))))
                                                         )
-                                                        val textResponse = withContext(Dispatchers.IO) {
-                                                            RetrofitClient.textService.generateText(BuildConfig.GEMINI_API_KEY, textRequest)
+                                                        val textResp = withContext(Dispatchers.IO) {
+                                                            RetrofitClient.textService.generateText(BuildConfig.GEMINI_API_KEY, textReq)
                                                         }
-                                                        val finalPr = textResponse.candidates?.firstOrNull()?.content?.parts?.firstOrNull()?.text 
-                                                            ?: "An incredibly peaceful abstract pastel color illustration of calm waters, glowing soft spheres and smooth mist"
+                                                        val finalPr = textResp.candidates?.firstOrNull()?.content?.parts?.firstOrNull()?.text
+                                                            ?: "Extremely quiet abstract watercolor painting with glowing soft warm orbs and vaporous mountains indigo tones"
 
                                                         translatedPromptUsed = finalPr
 
-                                                        // 2. Call gemini-2.5-flash-image to generate the actual picture
-                                                        val imageRequest = GenerateContentRequest(
+                                                        // 2. Call image generator from gemini
+                                                        val imageReq = GenerateContentRequest(
                                                             contents = listOf(Content(parts = listOf(Part(text = finalPr)))),
                                                             generationConfig = GenerationConfig(
-                                                                imageConfig = ImageConfig(aspectRatio = "1:1", imageSize = "1K"),
+                                                                imageConfig = ImageConfig("1:1", "1K"),
                                                                 responseModalities = listOf("TEXT", "IMAGE")
                                                             )
                                                         )
-                                                        val imageResponse = withContext(Dispatchers.IO) {
-                                                            RetrofitClient.imageService.generateImage(BuildConfig.GEMINI_API_KEY, imageRequest)
+                                                        val imgResp = withContext(Dispatchers.IO) {
+                                                            RetrofitClient.imageService.generateImage(BuildConfig.GEMINI_API_KEY, imageReq)
                                                         }
 
-                                                        val base64Str = imageResponse.candidates?.firstOrNull()?.content?.parts?.firstOrNull { it.inlineData != null }?.inlineData?.data
-                                                        if (base64Str != null) {
-                                                            val decoded = decodeBase64ToBitmap(base64Str)
-                                                            if (decoded != null) {
-                                                                generatedImage = decoded
+                                                        val b64 = imgResp.candidates?.firstOrNull()?.content?.parts?.firstOrNull { it.inlineData != null }?.inlineData?.data
+                                                        if (b64 != null) {
+                                                            val btm = decodeBase64ToBitmap(b64)
+                                                            if (btm != null) {
+                                                                generatedImage = btm
                                                                 imageMessage = "Tu oasis mental ha sido forjado con éxito."
                                                             } else {
-                                                                imageMessage = "Se recibió la respuesta del servidor pero no pudo decodificarse como imagen."
+                                                                imageMessage = "Se recibió la respuesta, pero ocurrió un problema al decodificar la imagen."
                                                             }
                                                         } else {
-                                                            imageMessage = "La IA no entregó datos visuales. Comprueba que el modelo tenga cuotas disponibles."
+                                                            imageMessage = "No se recibieron datos de imagen de la IA. Revisa tus cuotas o prueba el modo local."
                                                         }
                                                     } catch (e: Exception) {
-                                                        imageMessage = "Fallo de conexión IA: ${e.localizedMessage}. Tacha el modo offline en Ajustes para probar."
+                                                        imageMessage = "Error de conexión IA: ${e.localizedMessage}. Utiliza el 'Modo Simulado' en Ajustes."
                                                     }
                                                 }
                                                 isGeneratingImage = false
                                             }
                                         },
                                         colors = ButtonDefaults.buttonColors(
-                                            containerColor = Color(0xFFD0BCFF),
-                                            contentColor = Color(0xFF381E72)
+                                            containerColor = Color(0xFF80DEEA),
+                                            contentColor = Color(0xFF003737)
                                         ),
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(56.dp),
+                                        modifier = Modifier.fillMaxWidth().height(54.dp),
                                         shape = RoundedCornerShape(100.dp)
                                     ) {
                                         Icon(
@@ -624,19 +1049,19 @@ fun OasisScreen() {
                                             modifier = Modifier.padding(end = 8.dp)
                                         )
                                         Text(
-                                            text = if (isDemoMode) "PROCESAR EN MODO LOCAL" else "GENERAR OASIS IA",
+                                            text = if (isDemoMode) "SIMULAR SANTUARIO" else "GENERAR OASIS IA",
                                             fontWeight = FontWeight.Bold,
                                             letterSpacing = 1.sp
                                         )
                                     }
                                 }
 
-                                // Status warning if API key isn't setup
+                                // Informative labels
                                 if (!isApiKeyConfigured) {
                                     item {
-                                        Spacer(modifier = Modifier.height(16.dp))
+                                        Spacer(modifier = Modifier.height(12.dp))
                                         Text(
-                                            text = "⚠️ Llave API de Gemini vacía. Usando el motor de simulación local. Sigue las instrucciones del panel 'Ajustes' para conectar la IA del servidor.",
+                                            text = "⚠️ Llave Gemini no configurada en AI Studio. Disfrutando del simulador local. Activa en Ajustes para conectar la IA del servidor.",
                                             color = Color(0xFFFFB74D),
                                             style = MaterialTheme.typography.bodySmall,
                                             textAlign = TextAlign.Center
@@ -646,7 +1071,7 @@ fun OasisScreen() {
                                     item {
                                         Spacer(modifier = Modifier.height(16.dp))
                                         Text(
-                                            text = "Prompt IA Traducido: \"$translatedPromptUsed\"",
+                                            text = "Prompt Traducido IA: \"$translatedPromptUsed\"",
                                             color = Color(0xFF94979F),
                                             style = MaterialTheme.typography.labelSmall,
                                             textAlign = TextAlign.Center,
@@ -660,10 +1085,10 @@ fun OasisScreen() {
                         Screen.PAZ -> {
                             Column(
                                 horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center,
+                                verticalArrangement = Arrangement.Top,
                                 modifier = Modifier
                                     .fillMaxSize()
-                                    .padding(32.dp)
+                                    .padding(24.dp)
                             ) {
                                 Box(
                                     modifier = Modifier
@@ -679,7 +1104,7 @@ fun OasisScreen() {
                                         .padding(horizontal = 16.dp, vertical = 6.dp)
                                 ) {
                                     Text(
-                                        text = "MANTRAS DEL DESCANSO",
+                                        text = "MANTRAS DE CONCIENCIA",
                                         color = Color(0xFFF06292),
                                         style = MaterialTheme.typography.labelSmall,
                                         fontWeight = FontWeight.Bold,
@@ -687,57 +1112,143 @@ fun OasisScreen() {
                                     )
                                 }
 
-                                Spacer(modifier = Modifier.height(24.dp))
+                                Spacer(modifier = Modifier.height(20.dp))
 
-                                // Dynamic generated reflection container
+                                // Real-time mantra Display Area
                                 Box(
                                     modifier = Modifier
-                                        .weight(1f)
-                                        .fillMaxWidth(),
+                                        .weight(0.4f)
+                                        .fillMaxWidth()
+                                        .background(Color(0xFF16181C), RoundedCornerShape(24.dp))
+                                        .border(BorderStroke(1.dp, Color(0xFF2C2F36)), RoundedCornerShape(24.dp))
+                                        .padding(24.dp),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     if (isGeneratingMantra) {
                                         CircularProgressIndicator(color = Color(0xFFF06292))
                                     } else {
-                                        Text(
-                                            text = generatedMantra,
-                                            color = Color(0xFFE2E2E6),
-                                            style = MaterialTheme.typography.headlineSmall,
-                                            fontWeight = FontWeight.Light,
-                                            textAlign = TextAlign.Center,
-                                            lineHeight = 36.sp,
-                                            modifier = Modifier.padding(horizontal = 8.dp)
-                                        )
+                                        Column(
+                                            horizontalAlignment = Alignment.CenterHorizontally,
+                                            verticalArrangement = Arrangement.Center
+                                        ) {
+                                            Text(
+                                                text = generatedMantra,
+                                                color = Color(0xFFE2E2E6),
+                                                style = MaterialTheme.typography.titleLarge,
+                                                fontWeight = FontWeight.ExtraLight,
+                                                textAlign = TextAlign.Center,
+                                                lineHeight = 32.sp,
+                                                modifier = Modifier.padding(horizontal = 8.dp)
+                                            )
+                                            
+                                            Spacer(modifier = Modifier.height(16.dp))
+                                            
+                                            // Action items: Copy & Favorite
+                                            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                                                val isFav = savedMantras.any { it.text == generatedMantra }
+                                                IconButton(
+                                                    onClick = {
+                                                        if (isFav) {
+                                                            val rem = savedMantras.find { it.text == generatedMantra }
+                                                            if (rem != null) viewModel.removeMantra(rem)
+                                                        } else {
+                                                            viewModel.saveMantra(generatedMantra, "IA")
+                                                        }
+                                                    }
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Favorite,
+                                                        contentDescription = "Favorito",
+                                                        tint = if (isFav) Color(0xFFF06292) else Color(0xFF94979F)
+                                                    )
+                                                }
+
+                                                IconButton(
+                                                    onClick = {
+                                                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                                        val clip = android.content.ClipData.newPlainText("Zen Mantra", generatedMantra)
+                                                        clipboard.setPrimaryClip(clip)
+                                                        android.widget.Toast.makeText(context, "Mantra copiado", android.widget.Toast.LENGTH_SHORT).show()
+                                                    }
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Share,
+                                                        contentDescription = "Copiar",
+                                                        tint = Color(0xFF94979F)
+                                                    )
+                                                }
+                                            }
+                                        }
                                     }
                                 }
 
-                                Spacer(modifier = Modifier.height(24.dp))
+                                Spacer(modifier = Modifier.height(14.dp))
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    // Custom input Mantra Creator
+                                    OutlinedTextField(
+                                        value = myCustomMantraInput,
+                                        onValueChange = { myCustomMantraInput = it },
+                                        placeholder = { Text("Escribe tu propia afirmación de hoy...", color = Color(0xFF686B73), fontSize = 13.sp) },
+                                        modifier = Modifier.weight(1f),
+                                        colors = TextFieldDefaults.colors(
+                                            focusedContainerColor = Color(0xFF16181C),
+                                            unfocusedContainerColor = Color(0xFF16181C),
+                                            focusedTextColor = Color.White,
+                                            unfocusedTextColor = Color.White,
+                                            focusedIndicatorColor = Color(0xFFF06292),
+                                            unfocusedIndicatorColor = Color(0xFF2C2F36)
+                                        ),
+                                        shape = RoundedCornerShape(12.dp),
+                                        singleLine = true
+                                    )
+
+                                    IconButton(
+                                        onClick = {
+                                            if (myCustomMantraInput.isNotEmpty()) {
+                                                viewModel.saveMantra(myCustomMantraInput, "Personal")
+                                                myCustomMantraInput = ""
+                                                android.widget.Toast.makeText(context, "Afirmación grabada en favoritos", android.widget.Toast.LENGTH_SHORT).show()
+                                            }
+                                        },
+                                        modifier = Modifier.background(Color(0xFFF06292), RoundedCornerShape(12.dp)).size(54.dp)
+                                    ) {
+                                        Icon(imageVector = Icons.Default.Add, contentDescription = "Guardar", tint = Color.White)
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(16.dp))
 
                                 Button(
                                     onClick = {
                                         coroutineScope.launch {
                                             isGeneratingMantra = true
                                             if (isDemoMode) {
-                                                delay(1500)
+                                                delay(1200)
                                                 val localMantras = listOf(
-                                                    "Afloja los hombros. Todo lo que te pesa desaparecerá de todos modos. Eres libre.",
-                                                    "No eres un robot programado para producir. Tienes derecho a tumbarte y mirar los colores de la pared.",
-                                                    "Hay una fuerza silenciosa en el universo velando por ti. Encomiéndate al momento actual.",
-                                                    "Tu cuerpo sabe respirar solo. Abandona las riendas de tu control. Déjate fluir."
+                                                    "Afloja los hombros de inmediato. Todo lo que te pesa desaparecerá de todos modos. Eres libre.",
+                                                    "No eres una máquina de producción. Tienes pleno derecho de pausar y contemplar las luces.",
+                                                    "Hay una fuerza mística velando por ti. Suelta las riendas de tu control.",
+                                                    "Tu respiración sabe fluir sola. Disfruta de este segundo exacto de respiración.",
+                                                    "La paz no es el destino, es tu estado nativo cuando desconectas la prisa.",
+                                                    "Tacha de tu mente la tarea del mañana. El mañana no existe en este espacio de aire."
                                                 )
                                                 generatedMantra = localMantras.random()
                                             } else {
                                                 try {
                                                     val request = GenerateTextRequest(
-                                                        contents = listOf(ContentText(parts = listOf(PartText(text = "Escribe una reflexión corta y trascendental (máximo 25 palabras) en español, poética y sanadora, inspirada en la meditación zen y en aliviar el estrés laboral diciéndole al usuario que deje de preocuparse por el trabajo. Devuelve solo la reflexión."))))
+                                                        contents = listOf(ContentText(parts = listOf(PartText(text = "Escribe una reflexión corta y trascendental (máximo 20 palabras) en español, poética, inspirada en la paz zen y en aliviar el estrés laboral diciéndole al usuario que detenga su afán y respire. Devuelve únicamente la reflexión sin rodeos."))))
                                                     )
                                                     val response = withContext(Dispatchers.IO) {
                                                         RetrofitClient.textService.generateText(BuildConfig.GEMINI_API_KEY, request)
                                                     }
                                                     generatedMantra = response.candidates?.firstOrNull()?.content?.parts?.firstOrNull()?.text
-                                                        ?: "La calma ya está en ti. Solo debes parar y escucharla."
+                                                        ?: "La calma ya reside en ti. Solo debes detener el paso acelerado."
                                                 } catch (e: Exception) {
-                                                    generatedMantra = "Paz mística: Siente la respiración recorrer tus pulmones. La calma es la única constante."
+                                                    generatedMantra = "Paz mística: siente cómo fluye el oxígeno en tu pecho. El trabajo puede esperar un instante."
                                                 }
                                             }
                                             isGeneratingMantra = false
@@ -745,23 +1256,115 @@ fun OasisScreen() {
                                     },
                                     colors = ButtonDefaults.buttonColors(
                                         containerColor = Color(0xFFF06292),
-                                        contentColor = Color(0xFF4A148C)
+                                        contentColor = Color(0xFFFFFFFF)
                                     ),
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(56.dp),
+                                    modifier = Modifier.fillMaxWidth().height(52.dp),
                                     shape = RoundedCornerShape(100.dp)
                                 ) {
-                                    Text(
-                                        text = "OTRA REFLEXIÓN IA",
-                                        fontWeight = FontWeight.Bold,
-                                        letterSpacing = 1.sp
-                                    )
+                                    Text("GENERAR REFLEXIÓN ZEN", fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
+                                }
+
+                                Spacer(modifier = Modifier.height(18.dp))
+
+                                // Saved Mantras List (Room)
+                                Text(
+                                    text = "Tus Mantras Guardados:",
+                                    color = Color(0xFF94979F),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                                    textAlign = TextAlign.Start
+                                )
+
+                                Box(modifier = Modifier.weight(0.6f)) {
+                                    if (savedMantras.isEmpty()) {
+                                        Box(
+                                            modifier = Modifier.fillMaxSize(),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = "No has guardado mantras aún. Toca el ❤️ en tu reflexión favorita para anclarla aquí.",
+                                                color = Color(0xFF686B73),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                textAlign = TextAlign.Center,
+                                                modifier = Modifier.padding(horizontal = 24.dp)
+                                            )
+                                        }
+                                    } else {
+                                        LazyColumn(
+                                            modifier = Modifier.fillMaxSize(),
+                                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            items(savedMantras) { mantra ->
+                                                Card(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    colors = CardDefaults.cardColors(containerColor = Color(0xFF16181C)),
+                                                    shape = RoundedCornerShape(18.dp),
+                                                    border = BorderStroke(1.dp, Color(0xFF2C2F36))
+                                                ) {
+                                                    Column(modifier = Modifier.padding(16.dp)) {
+                                                        Text(
+                                                            text = mantra.text,
+                                                            color = Color(0xFFE2E2E6),
+                                                            style = MaterialTheme.typography.bodyMedium,
+                                                            lineHeight = 22.sp
+                                                        )
+                                                        Spacer(modifier = Modifier.height(8.dp))
+                                                        Row(
+                                                            modifier = Modifier.fillMaxWidth(),
+                                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                                            verticalAlignment = Alignment.CenterVertically
+                                                        ) {
+                                                            Text(
+                                                                text = mantra.category,
+                                                                color = Color(0xFFF06292).copy(alpha = 0.7f),
+                                                                style = MaterialTheme.typography.labelSmall,
+                                                                fontWeight = FontWeight.Bold
+                                                            )
+
+                                                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                                IconButton(
+                                                                    onClick = {
+                                                                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                                                        val clip = android.content.ClipData.newPlainText("Zen Mantra", mantra.text)
+                                                                        clipboard.setPrimaryClip(clip)
+                                                                        android.widget.Toast.makeText(context, "Copiado", android.widget.Toast.LENGTH_SHORT).show()
+                                                                    },
+                                                                    modifier = Modifier.size(34.dp)
+                                                                ) {
+                                                                    Icon(
+                                                                        imageVector = Icons.Default.Share,
+                                                                        contentDescription = "Copiar",
+                                                                        tint = Color(0xFF94979F),
+                                                                        modifier = Modifier.size(16.dp)
+                                                                    )
+                                                                }
+
+                                                                IconButton(
+                                                                    onClick = { viewModel.removeMantra(mantra) },
+                                                                    modifier = Modifier.size(34.dp)
+                                                                ) {
+                                                                    Icon(
+                                                                        imageVector = Icons.Default.Delete,
+                                                                        contentDescription = "Borrar",
+                                                                        tint = Color(0xFFF06292),
+                                                                        modifier = Modifier.size(16.dp)
+                                                                    )
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
 
                         Screen.AJUSTES -> {
+                            var newNameInput by remember { mutableStateOf(userName) }
+                            var showGroundingGuide by remember { mutableStateOf(false) }
+
                             LazyColumn(
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.Top,
@@ -769,36 +1372,33 @@ fun OasisScreen() {
                                 modifier = Modifier.fillMaxSize()
                             ) {
                                 item {
-                                    // Author info
+                                    // Header Icon info
                                     Box(
                                         modifier = Modifier
-                                            .size(72.dp)
-                                            .background(
-                                                Color(0xFFD0BCFF).copy(alpha = 0.1f),
-                                                shape = RoundedCornerShape(100.dp)
-                                            )
-                                            .border(1.dp, Color(0xFFD0BCFF), RoundedCornerShape(100.dp)),
+                                            .size(68.dp)
+                                            .background(Color(0xFFD0BCFF).copy(alpha = 0.1f), CircleShape)
+                                            .border(1.dp, Color(0xFFD0BCFF), CircleShape),
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Icon(
                                             imageVector = Icons.Default.Info,
-                                            contentDescription = "Alberto Arce",
+                                            contentDescription = "Oasis",
                                             tint = Color(0xFFD0BCFF),
-                                            modifier = Modifier.size(36.dp)
+                                            modifier = Modifier.size(32.dp)
                                         )
                                     }
 
-                                    Spacer(modifier = Modifier.height(16.dp))
+                                    Spacer(modifier = Modifier.height(14.dp))
 
                                     Text(
-                                        text = "Información del Santuario",
+                                        text = "Configuración del Santuario",
                                         color = Color.White,
                                         style = MaterialTheme.typography.titleLarge,
                                         fontWeight = FontWeight.Bold
                                     )
 
                                     Text(
-                                        text = "Versión de Meditación 1.2",
+                                        text = "Versión de Meditación 1.5 - Pro",
                                         color = Color(0xFF94979F),
                                         style = MaterialTheme.typography.bodySmall
                                     )
@@ -806,56 +1406,260 @@ fun OasisScreen() {
                                     Spacer(modifier = Modifier.height(24.dp))
                                 }
 
-                                // Interactive IA Toggle
-                                item {
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .background(Color(0xFF1F2023), RoundedCornerShape(20.dp))
-                                            .border(1.dp, Color(0xFF44474F), RoundedCornerShape(20.dp))
-                                            .padding(16.dp)
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Column(modifier = Modifier.weight(1f)) {
-                                                Text(
-                                                    text = "Modo Simulado / Demo Local",
-                                                    color = Color.White,
-                                                    style = MaterialTheme.typography.bodyMedium,
-                                                    fontWeight = FontWeight.Bold
-                                                )
-                                                Text(
-                                                    text = "Activa este casillero si no dispones de un API Key en AI Studio, para disfrutar de simulaciones offline hermosas.",
-                                                    color = Color(0xFF94979F),
-                                                    style = MaterialTheme.typography.bodySmall
-                                                )
-                                            }
-                                            Switch(
-                                                checked = isDemoMode,
-                                                onCheckedChange = { isDemoMode = it },
-                                                colors = SwitchDefaults.colors(
-                                                    checkedThumbColor = Color(0xFFD0BCFF),
-                                                    checkedTrackColor = Color(0xFF49454F)
-                                                )
-                                            )
-                                        }
-                                    }
-
-                                    Spacer(modifier = Modifier.height(16.dp))
-                                }
-
-                                // Author panel attribution
+                                // Personalization: Naming card
                                 item {
                                     Card(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        colors = CardDefaults.cardColors(containerColor = Color(0xFF1F2023)),
+                                        modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                                        colors = CardDefaults.cardColors(containerColor = Color(0xFF16181C)),
                                         shape = RoundedCornerShape(20.dp),
-                                        border = CardDefaults.outlinedCardBorder().copy(width = 1.dp, brush = Brush.linearGradient(listOf(Color(0xFF44474F), Color(0xFF44474F))))
+                                        border = BorderStroke(1.dp, Color(0xFF2C2F36))
                                     ) {
-                                        Column(modifier = Modifier.padding(20.dp)) {
+                                        Column(modifier = Modifier.padding(18.dp)) {
+                                            Text(
+                                                text = "👤 ¿Cómo te llamaremos hoy?",
+                                                color = Color(0xFFD0BCFF),
+                                                style = MaterialTheme.typography.titleMedium,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            Text(
+                                                text = "Personaliza tus saludos en el Santuario.",
+                                                color = Color(0xFF94979F),
+                                                style = MaterialTheme.typography.bodySmall
+                                            )
+                                            Spacer(modifier = Modifier.height(12.dp))
+                                            
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                OutlinedTextField(
+                                                    value = newNameInput,
+                                                    onValueChange = { newNameInput = it },
+                                                    modifier = Modifier.weight(1f),
+                                                    colors = TextFieldDefaults.colors(
+                                                        focusedContainerColor = Color(0xFF0F1113),
+                                                        unfocusedContainerColor = Color(0xFF0F1113),
+                                                        focusedTextColor = Color.White,
+                                                        unfocusedTextColor = Color.White,
+                                                        focusedIndicatorColor = Color(0xFFD0BCFF)
+                                                    ),
+                                                    shape = RoundedCornerShape(12.dp),
+                                                    singleLine = true
+                                                )
+
+                                                IconButton(
+                                                    onClick = {
+                                                        if (newNameInput.isNotEmpty()) {
+                                                            sharedPreferences.edit().putString("user_name", newNameInput).apply()
+                                                            userName = newNameInput
+                                                            android.widget.Toast.makeText(context, "Nombre guardado: $newNameInput", android.widget.Toast.LENGTH_SHORT).show()
+                                                        }
+                                                    },
+                                                    modifier = Modifier.background(Color(0xFFD0BCFF), RoundedCornerShape(12.dp)).size(54.dp)
+                                                ) {
+                                                    Icon(imageVector = Icons.Default.Check, contentDescription = "Guardar", tint = Color(0xFF381E72))
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Settings details: METRONOME & LOCAL IA toggle
+                                item {
+                                    Card(
+                                        modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                                        colors = CardDefaults.cardColors(containerColor = Color(0xFF16181C)),
+                                        shape = RoundedCornerShape(20.dp),
+                                        border = BorderStroke(1.dp, Color(0xFF2C2F36))
+                                    ) {
+                                        Column(modifier = Modifier.padding(18.dp)) {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Column(modifier = Modifier.weight(1f)) {
+                                                    Text(
+                                                        text = "🔊 Metrónomo acústico",
+                                                        color = Color.White,
+                                                        style = MaterialTheme.typography.bodyMedium,
+                                                        fontWeight = FontWeight.Bold
+                                                    )
+                                                    Text(
+                                                        text = "Genera suaves pulsos CDMAN en los cambios de fase respiratoria para guiarte sin mirar la pantalla.",
+                                                        color = Color(0xFF94979F),
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        lineHeight = 16.sp
+                                                    )
+                                                }
+                                                Spacer(modifier = Modifier.width(10.dp))
+                                                Switch(
+                                                    checked = isAudioAlertsEnabled,
+                                                    onCheckedChange = { viewModel.toggleAudioAlerts() },
+                                                    colors = SwitchDefaults.colors(
+                                                        checkedThumbColor = Color(0xFFD0BCFF),
+                                                        checkedTrackColor = Color(0xFF49454F)
+                                                    )
+                                                )
+                                            }
+
+                                            Spacer(modifier = Modifier.height(16.dp))
+                                            Divider(color = Color(0xFF2C2F36))
+                                            Spacer(modifier = Modifier.height(16.dp))
+
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Column(modifier = Modifier.weight(1f)) {
+                                                    Text(
+                                                        text = "✨ Modo de Simulación de IA",
+                                                        color = Color.White,
+                                                        style = MaterialTheme.typography.bodyMedium,
+                                                        fontWeight = FontWeight.Bold
+                                                    )
+                                                    Text(
+                                                        text = "Utiliza el motor simulado fuera de línea con hermosas metáforas locales en lugar del servidor.",
+                                                        color = Color(0xFF94979F),
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        lineHeight = 16.sp
+                                                    )
+                                                }
+                                                Spacer(modifier = Modifier.width(10.dp))
+                                                Switch(
+                                                    checked = isDemoMode,
+                                                    onCheckedChange = { isDemoMode = it },
+                                                    colors = SwitchDefaults.colors(
+                                                        checkedThumbColor = Color(0xFFD0BCFF),
+                                                        checkedTrackColor = Color(0xFF49454F)
+                                                    )
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Interactive Grounding emergency assistance tool (5-4-3-2-1 SOS Grounding)
+                                item {
+                                    Card(
+                                        modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                                        colors = CardDefaults.cardColors(containerColor = Color(0xFF16181C)),
+                                        shape = RoundedCornerShape(20.dp),
+                                        border = BorderStroke(1.dp, Color(0xFF2C2F36))
+                                    ) {
+                                        Column(modifier = Modifier.padding(18.dp)) {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Column(modifier = Modifier.weight(1f)) {
+                                                    Text(
+                                                        text = "🚨 Botón de SOS Antiestrés",
+                                                        color = Color(0xFFFFB74D),
+                                                        style = MaterialTheme.typography.bodyMedium,
+                                                        fontWeight = FontWeight.Bold
+                                                    )
+                                                    Text(
+                                                        text = "Guía rápida interactiva 5-4-3-2-1 contra ansiedad extrema.",
+                                                        color = Color(0xFF94979F),
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        lineHeight = 16.sp
+                                                    )
+                                                }
+                                                Button(
+                                                    onClick = { showGroundingGuide = !showGroundingGuide },
+                                                    colors = ButtonDefaults.buttonColors(
+                                                        containerColor = Color(0xFFFFB74D).copy(alpha = 0.15f),
+                                                        contentColor = Color(0xFFFFB74D)
+                                                    ),
+                                                    border = BorderStroke(1.dp, Color(0xFFFFB74D).copy(alpha = 0.3f))
+                                                ) {
+                                                    Text(if (showGroundingGuide) "Cerrar" else "Ver SOS")
+                                                }
+                                            }
+
+                                            if (showGroundingGuide) {
+                                                Spacer(modifier = Modifier.height(16.dp))
+                                                Text(
+                                                    text = "Método de Anclaje 5-4-3-2-1:",
+                                                    color = Color.White,
+                                                    style = MaterialTheme.typography.titleSmall,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                                Spacer(modifier = Modifier.height(8.dp))
+                                                Text(
+                                                    text = "Busca en el espacio donde estés y concéntrate:\n\n" +
+                                                           "👀 5 Cosas que puedas VER: Identifica formas o colores sutiles a tu alrededor.\n" +
+                                                           "🖐️ 4 Cosas que puedas TOCAR: El teclado, tu ropa, la textura de tu mesa.\n" +
+                                                           "👂 3 Cosas que puedas ESCUCHAR: La lluvia, los zumbidos mecánicos lejanos, tu propio pecho.\n" +
+                                                           "👃 2 Cosas que puedas OLER: El aroma del café, el perfume, el aroma fresco del viento.\n" +
+                                                           "👅 1 Cosa que puedas SABOREAR: Tu boca limpia, un vaso de agua pura.\n\n" +
+                                                           "Siente tu peso firme sobre la silla, estás enraizado en la tierra. Todo está bien ahora.",
+                                                    color = Color(0xFFE2E2E6),
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    lineHeight = 18.sp
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Interactive administrative controls (Delete local DB stats)
+                                item {
+                                    Card(
+                                        modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                                        colors = CardDefaults.cardColors(containerColor = Color(0xFF16181C)),
+                                        shape = RoundedCornerShape(20.dp),
+                                        border = BorderStroke(1.dp, Color(0xFF2C2F36))
+                                    ) {
+                                        Column(modifier = Modifier.padding(18.dp)) {
+                                            Text(
+                                                text = "⚙️ Administrar Datos",
+                                                color = Color.White,
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            Text(
+                                                text = "Reinicia tu contador de racha y estadísticas purificando el historial del santuario.",
+                                                color = Color(0xFF94979F),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                lineHeight = 16.sp
+                                            )
+                                            Spacer(modifier = Modifier.height(14.dp))
+
+                                            Button(
+                                                onClick = {
+                                                    viewModel.clearAllStats()
+                                                    android.widget.Toast.makeText(context, "Historial de paz purificado. ¡Comienza de cero!", android.widget.Toast.LENGTH_SHORT).show()
+                                                },
+                                                colors = ButtonDefaults.buttonColors(
+                                                    containerColor = Color(0xFFF06292).copy(alpha = 0.12f),
+                                                    contentColor = Color(0xFFF06292)
+                                                ),
+                                                border = BorderStroke(1.dp, Color(0xFFF06292).copy(alpha = 0.25f)),
+                                                modifier = Modifier.fillMaxWidth(),
+                                                shape = RoundedCornerShape(100.dp)
+                                            ) {
+                                                Text("LIMPIAR HISTORIAL DE PAZ", fontWeight = FontWeight.SemiBold, letterSpacing = 0.5.sp)
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Creator Information Panel
+                                item {
+                                    Card(
+                                        modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                                        colors = CardDefaults.cardColors(containerColor = Color(0xFF16181C)),
+                                        shape = RoundedCornerShape(20.dp),
+                                        border = BorderStroke(1.dp, Color(0xFF2C2F36))
+                                    ) {
+                                        Column(modifier = Modifier.padding(18.dp)) {
                                             Text(
                                                 text = "✍️ Creador & Concepto",
                                                 color = Color(0xFFD0BCFF),
@@ -876,39 +1680,37 @@ fun OasisScreen() {
                                             )
                                             Spacer(modifier = Modifier.height(12.dp))
                                             Text(
-                                                text = "Diseñado para brindar alegría, aliviar el estrés corporativo y recordarnos que vivir y respirar es el regalo definitivo.",
+                                                text = "Diseñado para brindar momentos de alegría, purgar el estrés diario y recordarnos la mística belleza de respirar.",
                                                 color = Color(0xFFE2E2E6),
                                                 style = MaterialTheme.typography.bodySmall,
                                                 lineHeight = 20.sp
                                             )
                                         }
                                     }
-
-                                    Spacer(modifier = Modifier.height(16.dp))
                                 }
 
-                                // How to guide instructions
+                                // AI Configuration guide Instructions
                                 item {
                                     Card(
                                         modifier = Modifier.fillMaxWidth(),
-                                        colors = CardDefaults.cardColors(containerColor = Color(0xFF1F2023)),
+                                        colors = CardDefaults.cardColors(containerColor = Color(0xFF16181C)),
                                         shape = RoundedCornerShape(20.dp),
-                                        border = CardDefaults.outlinedCardBorder().copy(width = 1.dp, brush = Brush.linearGradient(listOf(Color(0xFF44474F), Color(0xFF44474F))))
+                                        border = BorderStroke(1.dp, Color(0xFF2C2F36))
                                     ) {
-                                        Column(modifier = Modifier.padding(20.dp)) {
+                                        Column(modifier = Modifier.padding(18.dp)) {
                                             Text(
-                                                text = "💡 Cómo configurar tu IA",
+                                                text = "💡 Cómo activar la Inteligencia de Servidor",
                                                 color = Color(0xFFFFB74D),
                                                 style = MaterialTheme.typography.bodyMedium,
                                                 fontWeight = FontWeight.Bold
                                             )
                                             Spacer(modifier = Modifier.height(6.dp))
                                             Text(
-                                                text = "1. Consigue tu API Key gratuita en Google AI Studio.\n" +
+                                                text = "1. Genera una API Key en Google AI Studio.\n" +
                                                        "2. Abre el 'Secrets panel' en el menú de AI Studio de este editor web.\n" +
-                                                       "3. Inserta tu llave con el nombre de 'GEMINI_API_KEY'.\n" +
-                                                       "4. Desactiva la 'Modo Simulado' superior para comenzar a generar de verdad con el servidor.",
-                                                color = Color(0xFFE2E2E6),
+                                                       "3. Inserta tu clave con el nombre 'GEMINI_API_KEY'.\n" +
+                                                       "4. Desactiva la casilla de 'Modo Simulado' superior para comenzar a generar de verdad con el servidor.",
+                                                color = Color(0xFFC4C6D0),
                                                 style = MaterialTheme.typography.bodySmall,
                                                 lineHeight = 20.sp
                                             )
@@ -922,9 +1724,40 @@ fun OasisScreen() {
             }
         }
     }
+
+    // Celebration alert triggered on fully finished breathing timer targets
+    if (showCompletionDialog) {
+        AlertDialog(
+            onDismissRequest = { showCompletionDialog = false },
+            title = {
+                Text(
+                    text = "✨ ¡Momento Completado!",
+                    color = Color(0xFFD0BCFF),
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    text = "Felicidades, has consagrado $lastPracticedMinutes ${if (lastPracticedMinutes == 1) "minuto" else "minutos"} de atención plena con la técnica '$lastPracticedMode'. Tu mente te lo agradece profundamente. Sigue nutriendo tu racha diaria.",
+                    color = Color(0xFFE2E2E6),
+                    lineHeight = 22.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = { showCompletionDialog = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD0BCFF), contentColor = Color(0xFF381E72))
+                ) {
+                    Text("Aceptar")
+                }
+            },
+            containerColor = Color(0xFF16181C),
+            textContentColor = Color(0xFFE2E2E6)
+        )
+    }
 }
 
-// Custom Navigation Item replicating the exact rounded background dynamic selection of Sophisticated Dark
+// Custom Navigation Item mimicking rounded background selection logic (M3 style)
 @Composable
 fun NavItem(
     icon: ImageVector,
@@ -933,7 +1766,7 @@ fun NavItem(
     onClick: () -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
-    val animatedOpacity by animateFloatAsState(targetValue = if (isSelected) 1f else 0.6f, label = "unselectedOpacity")
+    val animatedOpacity by animateFloatAsState(targetValue = if (isSelected) 1f else 0.55f, label = "tabsOpacity")
 
     Column(
         modifier = Modifier
@@ -950,28 +1783,64 @@ fun NavItem(
             modifier = Modifier
                 .clip(RoundedCornerShape(100.dp))
                 .background(
-                    if (isSelected) Color(0xFF49454F) else Color.Transparent
+                    if (isSelected) Color(0xFF2C2F36) else Color.Transparent
                 )
-                .padding(horizontal = 16.dp, vertical = 4.dp),
+                .padding(horizontal = 16.dp, vertical = 5.dp),
             contentAlignment = Alignment.Center
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = label,
-                tint = if (isSelected) Color(0xFFE8DEF8) else Color(0xFFE8DEF8).copy(alpha = 0.6f)
+                tint = if (isSelected) Color(0xFFD0BCFF) else Color(0xFFE8DEF8).copy(alpha = 0.55f)
             )
         }
         Spacer(modifier = Modifier.height(4.dp))
         Text(
             text = label,
-            color = if (isSelected) Color(0xFFE8DEF8) else Color(0xFFE8DEF8).copy(alpha = animatedOpacity),
+            color = if (isSelected) Color(0xFFD0BCFF) else Color(0xFFE8DEF8).copy(alpha = animatedOpacity),
             fontSize = 11.sp,
             fontWeight = FontWeight.Medium
         )
     }
 }
 
-// Decodes standard Base64 response strings back into an interactive android Bitmap
+@Composable
+fun StatCard(
+    title: String,
+    value: String,
+    iconText: String,
+    colorBg: Color,
+    colorBorder: Color,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .background(colorBg, RoundedCornerShape(20.dp))
+            .border(1.dp, colorBorder.copy(alpha = 0.35f), RoundedCornerShape(20.dp))
+            .padding(12.dp)
+    ) {
+        Column(horizontalAlignment = Alignment.Start) {
+            Text(text = iconText, fontSize = 20.sp, modifier = Modifier.padding(bottom = 6.dp))
+            Text(
+                text = title, 
+                color = Color(0xFF94979F), 
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = value, 
+                color = Color.White, 
+                style = MaterialTheme.typography.bodyMedium, 
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+// Decodes standard Base64 response strings back into interactive Android Bitmaps
 fun decodeBase64ToBitmap(base64Str: String): Bitmap? {
     return try {
         val decodedBytes = Base64.decode(base64Str, Base64.DEFAULT)
