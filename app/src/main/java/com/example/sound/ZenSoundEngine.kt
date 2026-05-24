@@ -31,19 +31,47 @@ object ZenSoundEngine {
 
     // Synchronized play state
     @Synchronized
-    fun start() {
+    fun start(
+        modeName: String? = null,
+        inhaleSec: Int = 0,
+        holdInSec: Int = 0,
+        exhaleSec: Int = 0,
+        holdOutSec: Int = 0
+    ) {
         if (isPlaying) return
         isPlaying = true
 
+        val baseFreq = when (modeName) {
+            "SIMPLE" -> 432.0   // Universal Healing
+            "BOX" -> 417.0      // Wiping out negativity / Focus
+            "SLEEP" -> 396.0    // Liberating from fear
+            "COHERENCE" -> 528.0 // Transformation / DNA Repair
+            else -> 432.0
+        }
+        val beatFreq = when (modeName) {
+            "SIMPLE" -> 8.0     // Alpha (Relaxed)
+            "BOX" -> 14.0       // Beta (Focus)
+            "SLEEP" -> 3.0      // Delta (Deep Sleep)
+            "COHERENCE" -> 6.0  // Theta (Meditative Sync)
+            else -> 4.0
+        }
+        val bpm = when (modeName) {
+            "SIMPLE" -> 60.0
+            "BOX" -> 70.0
+            "SLEEP" -> 50.0
+            "COHERENCE" -> 55.0
+            else -> 60.0
+        }
+
         job = scope.launch {
-            val sampleRate = 44100
-            val minBufferSize = AudioTrack.getMinBufferSize(
+            try {
+                val sampleRate = 44100
+                val minBufferSize = AudioTrack.getMinBufferSize(
                 sampleRate,
                 AudioFormat.CHANNEL_OUT_STEREO,
                 AudioFormat.ENCODING_PCM_16BIT
             )
 
-            // Initialize AudioTrack for real-time stereo streaming
             val bufferSize = minBufferSize.coerceAtLeast(16384)
             val track = AudioTrack(
                 AudioManager.STREAM_MUSIC,
@@ -66,9 +94,18 @@ object ZenSoundEngine {
             var phaseRight = 0.0
             val twoPi = 2.0 * Math.PI
 
-            // Binaural setup: 432 Hz in Left, 436 Hz in Right (gently guides brain to 4Hz Theta wave)
-            val leftIncrement = 432.0 / sampleRate
-            val rightIncrement = 436.0 / sampleRate
+            // Binaural setup guides brain to specific wave
+            val leftIncrement = baseFreq / sampleRate
+            val rightIncrement = (baseFreq + beatFreq) / sampleRate
+
+            // Heartbeat simulation
+            var heartbeatPhase = 0.0
+            val heartbeatIncrement = (bpm / 60.0) / sampleRate
+
+            // Breathing cycle envelope
+            val cycleLength = inhaleSec + holdInSec + exhaleSec + holdOutSec
+            var cyclePhase = 0.0
+            val cycleIncrement = if (cycleLength > 0) 1.0 / (sampleRate * cycleLength) else 0.0
 
             // Wind Chime registers
             var chimeActive = false
@@ -82,9 +119,38 @@ object ZenSoundEngine {
 
             while (isPlaying && coroutineContext.isActive) {
                 for (i in 0 until writeBuffer.size step 2) {
+                    
+                    // --- Breathing Envelope ---
+                    var breathMultiplier = 1.0
+                    if (cycleLength > 0) {
+                        val pInhale = inhaleSec.toDouble() / cycleLength
+                        val pHoldIn = pInhale + holdInSec.toDouble() / cycleLength
+                        val pExhale = pHoldIn + exhaleSec.toDouble() / cycleLength
+                        
+                        breathMultiplier = when {
+                            cyclePhase < pInhale -> 0.3 + 0.7 * (if (pInhale > 0.0) cyclePhase / pInhale else 1.0)
+                            cyclePhase < pHoldIn -> 1.0
+                            cyclePhase < pExhale -> 1.0 - 0.7 * (if (exhaleSec > 0) (cyclePhase - pHoldIn) / (exhaleSec.toDouble() / cycleLength) else 1.0)
+                            else -> 0.3
+                        }
+                        
+                        cyclePhase += cycleIncrement
+                        if (cyclePhase > 1.0) cyclePhase -= 1.0
+                    }
+
+                    // --- Heartbeat Envelope ---
+                    heartbeatPhase += heartbeatIncrement
+                    if (heartbeatPhase > 1.0) heartbeatPhase -= 1.0
+                    
+                    // Double pulse simulating real heart (lub-dub)
+                    val pulse1 = Math.max(0.0, sin(Math.PI * (heartbeatPhase * 5.0))) 
+                    val pulse2 = Math.max(0.0, sin(Math.PI * ((heartbeatPhase - 0.2) * 5.0)))
+                    val heartBump = if (heartbeatPhase < 0.2) Math.pow(pulse1, 4.0) else if (heartbeatPhase in 0.2..0.4) Math.pow(pulse2, 4.0) else 0.0
+                    val throb = 0.85 + 0.15 * heartBump
+
                     // 1. Calculate the binaural hum drone (low amplitude, soothing)
-                    val droneL = sin(phaseLeft * twoPi) * 1600.0
-                    val droneR = sin(phaseRight * twoPi) * 1600.0
+                    val droneL = sin(phaseLeft * twoPi) * 1600.0 * throb * breathMultiplier
+                    val droneR = sin(phaseRight * twoPi) * 1600.0 * throb * breathMultiplier
 
                     phaseLeft += leftIncrement
                     if (phaseLeft > 1.0) phaseLeft -= 1.0
@@ -140,6 +206,9 @@ object ZenSoundEngine {
                 track.release()
             } catch (e: Exception) {
                 // ignore
+            }
+            } catch (e: Exception) {
+               // handle
             }
         }
     }

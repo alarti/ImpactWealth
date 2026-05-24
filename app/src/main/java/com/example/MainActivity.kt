@@ -215,6 +215,10 @@ fun OasisScreen() {
     var lastPracticedMinutes by remember { mutableStateOf(1) }
 
     LaunchedEffect(isBreatheRunning) {
+        if (!isBreatheRunning) {
+            ZenSoundEngine.stop()
+            isZenMusicPlaying = false
+        }
         if (!isBreatheRunning && sessionProgressSec > 0) {
             val targetSec = targetSessionMinutes * 60
             if (sessionProgressSec >= targetSec) {
@@ -515,7 +519,11 @@ fun OasisScreen() {
                                         Spacer(modifier = Modifier.height(24.dp))
 
                                         Button(
-                                            onClick = { viewModel.stopBreathingSession(completedSuccessfully = false) },
+                                            onClick = { 
+                                                viewModel.stopBreathingSession(completedSuccessfully = false) 
+                                                ZenSoundEngine.stop()
+                                                isZenMusicPlaying = false
+                                            },
                                             colors = ButtonDefaults.buttonColors(
                                                 containerColor = Color(0xFFF06292).copy(alpha = 0.2f),
                                                 contentColor = Color(0xFFF06292)
@@ -653,7 +661,18 @@ fun OasisScreen() {
                                         Spacer(modifier = Modifier.height(24.dp))
 
                                         Button(
-                                            onClick = { viewModel.startBreathingSession() },
+                                            onClick = { 
+                                                viewModel.startBreathingSession() 
+                                                isZenMusicPlaying = true
+                                                ZenSoundEngine.stop()
+                                                ZenSoundEngine.start(
+                                                    modeName = selectedMode.name,
+                                                    inhaleSec = selectedMode.inhaleSec,
+                                                    holdInSec = selectedMode.holdInSec,
+                                                    exhaleSec = selectedMode.exhaleSec,
+                                                    holdOutSec = selectedMode.holdOutSec
+                                                )
+                                            },
                                             colors = ButtonDefaults.buttonColors(
                                                 containerColor = Color(0xFFD0BCFF),
                                                 contentColor = Color(0xFF381E72)
@@ -782,23 +801,52 @@ fun OasisScreen() {
                                                 }
                                             }
                                         } else {
-                                            // Procedural elegant custom canvas using color gradients
+                                            // Animated procedural elegant custom canvas using color gradients
                                             val scColor1 = currentScenarioColors.first
                                             val scColor2 = currentScenarioColors.second
+                                            
+                                            val infiniteTransition = rememberInfiniteTransition(label = "escape_waves")
+                                            val wavePhase by infiniteTransition.animateFloat(
+                                                initialValue = 0f,
+                                                targetValue = 2f * Math.PI.toFloat(),
+                                                animationSpec = infiniteRepeatable(
+                                                    animation = tween(12000, easing = LinearEasing),
+                                                    repeatMode = RepeatMode.Restart
+                                                ),
+                                                label = "wave_phase"
+                                            )
+                                            val pulsingRadius by infiniteTransition.animateFloat(
+                                                initialValue = 90f,
+                                                targetValue = 150f,
+                                                animationSpec = infiniteRepeatable(
+                                                    animation = tween(4000, easing = FastOutSlowInEasing),
+                                                    repeatMode = RepeatMode.Reverse
+                                                ),
+                                                label = "pulsing_radius"
+                                            )
+                                            
                                             Canvas(modifier = Modifier.fillMaxSize()) {
                                                 drawRect(
                                                     brush = Brush.verticalGradient(
                                                         colors = listOf(scColor1.copy(alpha = 0.35f), Color(0xFF0C0D0F))
                                                     )
                                                 )
-                                                drawCircle(
-                                                    color = scColor1.copy(alpha = 0.3f),
-                                                    radius = 110.dp.toPx(),
-                                                    center = Offset(size.width / 2f, size.height / 1.4f)
-                                                )
+                                                // Generate multiple moving waves
+                                                for (i in 0..2) {
+                                                    val offsetPhase = wavePhase + (i * Math.PI.toFloat() * 0.6f)
+                                                    val yOffset = kotlin.math.sin(offsetPhase.toDouble()).toFloat() * 40f
+                                                    val xOffset = kotlin.math.cos(offsetPhase.toDouble()).toFloat() * 30f
+                                                    
+                                                    drawCircle(
+                                                        color = scColor1.copy(alpha = 0.2f - (i * 0.05f)),
+                                                        radius = (pulsingRadius + (i * 30f)).dp.toPx(),
+                                                        center = Offset(size.width / 2f + xOffset.dp.toPx(), size.height / 1.4f + yOffset.dp.toPx())
+                                                    )
+                                                }
+                                                
                                                 drawCircle(
                                                     color = Color.White.copy(alpha = 0.15f),
-                                                    radius = 45.dp.toPx(),
+                                                    radius = (pulsingRadius * 0.4f).dp.toPx(),
                                                     center = Offset(size.width / 2f, size.height / 1.6f)
                                                 )
                                             }
@@ -824,6 +872,22 @@ fun OasisScreen() {
                                         }
                                     }
                                     Spacer(modifier = Modifier.height(18.dp))
+                                    
+                                    // Audio Synthesizer Controller for Escape mode
+                                    if (generatedImage == null) {
+                                        ZenMusicPlayerCard(
+                                            isPlaying = isZenMusicPlaying,
+                                            onToggle = { turnOn ->
+                                                isZenMusicPlaying = turnOn
+                                                if (turnOn) {
+                                                    ZenSoundEngine.start("SIMPLE")
+                                                } else {
+                                                    ZenSoundEngine.stop()
+                                                }
+                                            }
+                                        )
+                                        Spacer(modifier = Modifier.height(18.dp))
+                                    }
                                 }
 
                                 // Preset Sanctuaries Choose Title
@@ -1001,10 +1065,14 @@ fun OasisScreen() {
                                                 isGeneratingImage = true
                                                 delay(2500)
                                                 if (stressInput.isNotEmpty()) {
-                                                    imageMessage = "Tu carga laboral de '${stressInput}' ha sido diluida bajo dunas infinitas de serenidad procedimental local."
+                                                    imageMessage = "Tu carga de estrés, '${stressInput}', se disipa en ondas de luz."
                                                 }
                                                 generatedImage = null
                                                 isGeneratingImage = false
+                                                
+                                                isZenMusicPlaying = true
+                                                ZenSoundEngine.stop()
+                                                ZenSoundEngine.start("SIMPLE")
                                             }
                                         },
                                         colors = ButtonDefaults.buttonColors(
